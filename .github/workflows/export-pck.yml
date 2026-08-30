@@ -7,6 +7,10 @@ on:
         description: godot-secure run id to reuse (empty = latest success)
         required: false
         default: ""
+      levels:
+        description: Comma-separated level ids to export (e.g. the_loss,the_war). Empty = all.
+        required: false
+        default: ""
 
 env:
   SECURE_REPOSITORY: meny2333/godot-secure
@@ -41,6 +45,9 @@ jobs:
 
   export:
     needs: engine
+    if: |
+      inputs.levels == '' ||
+      contains(fromJSON(format('["{0}"]', replace(inputs.levels, ' ', ''))), matrix.id)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -49,19 +56,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - repo: SHLID001-Loss
+          - id: the_loss
+            repo: SHLID001-Loss
             pck: the_loss.pck
-          - repo: SHLID002-Origin
+          - id: the_cloudmirage
+            repo: SHLID002-Origin
             pck: the_cloudmirage.pck
-          - repo: SHLID003-War
+          - id: the_war
+            repo: SHLID003-War
             pck: the_war.pck
-          - repo: SHLID005-Seabed
+          - id: the_seabed
+            repo: SHLID005-Seabed
             pck: the_seabed.pck
-          - repo: SHLID006-Amnesia
+          - id: the_amnesia
+            repo: SHLID006-Amnesia
             pck: the_amnesia.pck
-          - repo: SHLID007-Winter
+          - id: the_winter
+            repo: SHLID007-Winter
             pck: the_winter.pck
-          - repo: SHLID008-Daylight
+          - id: the_daylight
+            repo: SHLID008-Daylight
             pck: the_daylight.pck
     env:
       SCRIPT_AES256_ENCRYPTION_KEY: ${{ secrets.SCRIPT_AES256_ENCRYPTION_KEY }}
@@ -137,34 +151,3 @@ jobs:
           done
           echo "push failed after retries" >&2
           exit 1
-
-  mirror:
-    needs: export
-    if: success()
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Mirror latest packs to CNB
-        env:
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Do NOT clone the whole repo (slow). Fetch latest commit, then
-          # download only the pck files via raw and push an orphan commit.
-          # CNB already holds most blobs, so the push is incremental.
-          sha="$(git ls-remote https://github.com/godotline/PCKLevels.git main | cut -f1)"
-          if [[ -z "$sha" ]]; then
-            echo "cannot resolve PCKLevels main sha" >&2
-            exit 1
-          fi
-          mkdir dest && cd dest
-          git init -q
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          for f in README.md inv.pck sample.pck \
-                   the_amnesia.pck the_cloudmirage.pck the_daylight.pck \
-                   the_loss.pck the_seabed.pck the_war.pck the_winter.pck; do
-            curl -fsSL -o "$f" "https://raw.githubusercontent.com/godotline/PCKLevels/$sha/$f"
-          done
-          git add -A
-          git commit -q -m "Mirror PCKLevels @ $sha"
-          git push --force "https://cnb:${CNB_TOKEN}@cnb.cool/godot-line/PCKLevels.git" HEAD:main
