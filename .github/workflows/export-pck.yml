@@ -1,0 +1,137 @@
+name: Export encrypted PCKs
+
+on:
+  workflow_dispatch:
+    inputs:
+      secure_run_id:
+        description: godot-secure run id to reuse (empty = latest success)
+        required: false
+        default: ""
+
+env:
+  SECURE_REPOSITORY: meny2333/godot-secure
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - name: Resolve reusable secure-engine run
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GODOT_SECURE_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.secure_run_id }}"
+          if [[ -z "$run_id" ]]; then
+            run_id="$(gh run list \
+              --repo "$SECURE_REPOSITORY" \
+              --workflow secure_builds.yml \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [[ -z "$run_id" ]]; then
+            echo "No successful godot-secure run found." >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+  export:
+    needs: engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: SHLID001-Loss
+            pck: the_loss.pck
+          - repo: SHLID002-Origin
+            pck: the_cloudmirage.pck
+          - repo: SHLID003-War
+            pck: the_war.pck
+          - repo: SHLID005-Seabed
+            pck: the_seabed.pck
+          - repo: SHLID006-Amnesia
+            pck: the_amnesia.pck
+          - repo: SHLID007-Winter
+            pck: the_winter.pck
+          - repo: SHLID008-Daylight
+            pck: the_daylight.pck
+    env:
+      SCRIPT_AES256_ENCRYPTION_KEY: ${{ secrets.SCRIPT_AES256_ENCRYPTION_KEY }}
+      GODOT_SCRIPT_ENCRYPTION_KEY: ${{ secrets.SCRIPT_AES256_ENCRYPTION_KEY }}
+      GH_TOKEN: ${{ secrets.GODOT_SECURE_TOKEN }}
+    steps:
+      - name: Download secure Linux editor
+        run: |
+          set -euo pipefail
+          mkdir -p engine/gdkey-secure-linux-editor
+          gh run download '${{ needs.engine.outputs.run_id }}' \
+            --repo "$SECURE_REPOSITORY" \
+            --name gdkey-secure-linux-editor \
+            --dir engine/gdkey-secure-linux-editor
+
+      - name: Checkout level
+        run: |
+          set -euo pipefail
+          gh repo clone "godotline/${{ matrix.repo }}" level -- --depth 1
+
+      - name: Export encrypted pack
+        run: |
+          set -euo pipefail
+          if [[ ! "$GODOT_SCRIPT_ENCRYPTION_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "SCRIPT_AES256_ENCRYPTION_KEY missing or malformed." >&2
+            exit 1
+          fi
+          editor="$(find engine/gdkey-secure-linux-editor -type f -iname '*editor*' -print -quit)"
+          if [[ -z "$editor" ]]; then
+            echo "Secure Linux editor was not found." >&2
+            exit 1
+          fi
+          chmod +x "$editor"
+          mkdir -p out
+          "$editor" --headless --path level --export-pack "Windows Desktop" "$GITHUB_WORKSPACE/out/${{ matrix.pck }}"
+          test -f "out/${{ matrix.pck }}"
+          md5sum "out/${{ matrix.pck }}" | awk '{print $1}' > "out/${{ matrix.pck }}.md5"
+
+      - name: Push pack to GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/godotline/PCKLevels.git" dest
+          cp "out/${{ matrix.pck }}" dest/
+          cd dest
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ matrix.pck }}"
+          if git diff --cached --quiet; then
+            echo "unchanged ${{ matrix.pck }}"
+            exit 0
+          fi
+          git commit -m "Update ${{ matrix.pck }}"
+          for i in 1 2 3 4 5 6 7 8; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((i * 2))
+          done
+          echo "push failed after retries" >&2
+          exit 1
+
+  mirror:
+    needs: export
+    if: success()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mirror GitHub main to CNB
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/godotline/PCKLevels.git" dest
+          cd dest
+          git push --force "https://cnb:${CNB_TOKEN}@cnb.cool/godot-line/PCKLevels.git" HEAD:main
