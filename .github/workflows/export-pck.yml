@@ -45,9 +45,6 @@ jobs:
 
   export:
     needs: engine
-    if: |
-      inputs.levels == '' ||
-      contains(format(',{0},', inputs.levels), format(',{0},', matrix.id))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -82,7 +79,20 @@ jobs:
       GODOT_SCRIPT_ENCRYPTION_KEY: ${{ secrets.SCRIPT_AES256_ENCRYPTION_KEY }}
       GH_TOKEN: ${{ secrets.GODOT_SECURE_TOKEN }}
     steps:
+      - name: Check level filter
+        id: skip
+        run: |
+          req="${{ inputs.levels }}"
+          if [[ -z "$req" ]] || [[ ",${req}," == *",${{ matrix.id }},"* ]]; then
+            echo "should_export=true" >> "$GITHUB_OUTPUT"
+            echo "export ${{ matrix.id }}"
+          else
+            echo "should_export=false" >> "$GITHUB_OUTPUT"
+            echo "skip ${{ matrix.id }} (not in $req)"
+          fi
+
       - name: Download secure Linux editor
+        if: steps.skip.outputs.should_export == 'true'
         run: |
           set -euo pipefail
           mkdir -p engine/gdkey-secure-linux-editor
@@ -92,11 +102,13 @@ jobs:
             --dir engine/gdkey-secure-linux-editor
 
       - name: Checkout level
+        if: steps.skip.outputs.should_export == 'true'
         run: |
           set -euo pipefail
           gh repo clone "godotline/${{ matrix.repo }}" level -- --depth 1
 
       - name: Import project assets
+        if: steps.skip.outputs.should_export == 'true'
         run: |
           set -euo pipefail
           editor="$(find engine/gdkey-secure-linux-editor -type f -iname '*editor*' -print -quit)"
@@ -109,6 +121,7 @@ jobs:
           "$editor" --headless --import --path level
 
       - name: Export encrypted pack
+        if: steps.skip.outputs.should_export == 'true'
         run: |
           set -euo pipefail
           if [[ ! "$GODOT_SCRIPT_ENCRYPTION_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
@@ -127,6 +140,7 @@ jobs:
           md5sum "out/${{ matrix.pck }}" | awk '{print $1}' > "out/${{ matrix.pck }}.md5"
 
       - name: Push pack to GitHub
+        if: steps.skip.outputs.should_export == 'true'
         env:
           GH_TOKEN: ${{ secrets.GODOT_SECURE_TOKEN }}
         run: |
