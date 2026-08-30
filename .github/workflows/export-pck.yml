@@ -47,7 +47,7 @@ jobs:
     needs: engine
     if: |
       inputs.levels == '' ||
-      contains(fromJSON(format('["{0}"]', replace(inputs.levels, ' ', ''))), matrix.id)
+      contains(format(',{0},', inputs.levels), format(',{0},', matrix.id))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
