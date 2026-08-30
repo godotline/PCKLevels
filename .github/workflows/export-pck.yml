@@ -82,6 +82,18 @@ jobs:
           set -euo pipefail
           gh repo clone "godotline/${{ matrix.repo }}" level -- --depth 1
 
+      - name: Import project assets
+        run: |
+          set -euo pipefail
+          editor="$(find engine/gdkey-secure-linux-editor -type f -iname '*editor*' -print -quit)"
+          if [[ -z "$editor" ]]; then
+            echo "Secure Linux editor was not found." >&2
+            exit 1
+          fi
+          chmod +x "$editor"
+          # Fresh checkouts have no .godot import cache; build it before exporting.
+          "$editor" --headless --import --path level
+
       - name: Export encrypted pack
         run: |
           set -euo pipefail
@@ -100,9 +112,10 @@ jobs:
           test -f "out/${{ matrix.pck }}"
           md5sum "out/${{ matrix.pck }}" | awk '{print $1}' > "out/${{ matrix.pck }}.md5"
 
-      - name: Push pack to GitHub
+      - name: Push pack to GitHub & CNB
         env:
           GH_TOKEN: ${{ secrets.GODOT_SECURE_TOKEN }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
           set -euo pipefail
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/godotline/PCKLevels.git" dest
@@ -116,24 +129,22 @@ jobs:
             exit 0
           fi
           git commit -m "Update ${{ matrix.pck }}"
+          # Push to GitHub, rebase-retry to survive concurrent matrix jobs.
           for i in 1 2 3 4 5 6 7 8; do
-            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              break
+            fi
+            sleep $((i * 2))
+          done
+          # Mirror to CNB reusing this checkout (no extra full clone).
+          # CNB rejects shallow pushes, so unshallow first (small increment).
+          git fetch --unshallow origin
+          for i in 1 2 3 4 5 6 7 8; do
+            if git pull --rebase "https://cnb:${CNB_TOKEN}@cnb.cool/godot-line/PCKLevels.git" main \
+              && git push "https://cnb:${CNB_TOKEN}@cnb.cool/godot-line/PCKLevels.git" HEAD:main; then
+              exit 0
+            fi
             sleep $((i * 2))
           done
           echo "push failed after retries" >&2
           exit 1
-
-  mirror:
-    needs: export
-    if: success()
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Mirror GitHub main to CNB
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/godotline/PCKLevels.git" dest
-          cd dest
-          git push --force "https://cnb:${CNB_TOKEN}@cnb.cool/godot-line/PCKLevels.git" HEAD:main
